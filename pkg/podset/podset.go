@@ -203,7 +203,11 @@ func RestorePodSpec(meta *metav1.ObjectMeta, spec *corev1.PodSpec, info PodSetIn
 		changed = true
 	}
 	if !equality.Semantic.DeepEqual(spec.Affinity, info.Affinity) {
-		spec.Affinity = info.Affinity.DeepCopy()
+		if info.Affinity != nil {
+			spec.Affinity = info.Affinity.DeepCopy()
+		} else {
+			spec.Affinity = nil
+		}
 		changed = true
 	}
 	return changed
