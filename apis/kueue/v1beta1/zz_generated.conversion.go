@@ -1649,6 +1649,7 @@ func autoConvert_v1beta1_LocalQueueSpec_To_v1beta2_LocalQueueSpec(in *LocalQueue
 	out.ClusterQueue = v1beta2.ClusterQueueReference(in.ClusterQueue)
 	out.StopPolicy = (*v1beta2.StopPolicy)(unsafe.Pointer(in.StopPolicy))
 	out.FairSharing = (*v1beta2.FairSharing)(unsafe.Pointer(in.FairSharing))
+	out.ExcludedNodes = *(*[]string)(unsafe.Pointer(&in.ExcludedNodes))
 	return nil
 }
 
@@ -1661,6 +1662,7 @@ func autoConvert_v1beta2_LocalQueueSpec_To_v1beta1_LocalQueueSpec(in *v1beta2.Lo
 	out.ClusterQueue = ClusterQueueReference(in.ClusterQueue)
 	out.StopPolicy = (*StopPolicy)(unsafe.Pointer(in.StopPolicy))
 	out.FairSharing = (*FairSharing)(unsafe.Pointer(in.FairSharing))
+	out.ExcludedNodes = *(*[]string)(unsafe.Pointer(&in.ExcludedNodes))
 	return nil
 }
 

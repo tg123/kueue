@@ -54,6 +54,15 @@ type LocalQueueSpec struct {
 	// if AdmissionFairSharing is enabled in the Kueue configuration.
 	// +optional
 	FairSharing *FairSharing `json:"fairSharing,omitempty"`
+
+	// excludedNodes is an optional list of node names that workloads admitted
+	// through this LocalQueue should NOT be scheduled to.
+	// When set, a NodeAffinity anti-affinity rule is injected into each admitted
+	// workload's PodSets to prevent scheduling on the listed nodes.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=100
+	ExcludedNodes []string `json:"excludedNodes,omitempty"`
 }
 
 // Deprecated: LocalQueueFlavorStatus is deprecated and marked for removal in v1beta2.
