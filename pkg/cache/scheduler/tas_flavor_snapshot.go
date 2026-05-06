@@ -1475,9 +1475,8 @@ func (s *TASFlavorSnapshot) buildTopologyAssignmentForLevels(domains []*domain, 
 	}
 	assignment.Levels = s.levelKeys[levelIdx:]
 	for _, domain := range domains {
-		if domain.state <= 0 {
-			// == 0: It may happen when PodSet count is 0 or when using LeastFreeCapacity algorithm.
-			// <  0: Defensive clamp: negative state would cause apiserver CRD validation to reject
+		if domain.state == 0 {
+			// It may happen when PodSet count is 0 or when using LeastFreeCapacity algorithm.
 			continue
 		}
 		assignment.Domains = append(assignment.Domains, utiltas.TopologyDomainAssignment{
@@ -1626,11 +1625,22 @@ func (s *TASFlavorSnapshot) fillInCounts(requirements *topologyAssignmentPodRequ
 			remainingCapacity.Sub(leafAssumedUsage)
 		}
 		var limitingRes corev1.ResourceName
-		leaf.state, limitingRes = requirements.requests.CountInWithLimitingResource(remainingCapacity)
-		// apiserver CRD validation silently rejects (Individual >= 1).
-		if leaf.state < 0 {
-			leaf.state = 0
+		// Bug B observability: when usage exceeds capacity for any resource,
+		// remainingCapacity is negative and CountInWithLimitingResource clamps
+		// the count to 0. Surface the over-subscription so operators can
+		// correlate it with downstream "no fits" outcomes without enabling
+		// deeper traces.
+		if log := s.log.V(2); log.Enabled() {
+			for rName, v := range remainingCapacity {
+				if v < 0 {
+					log.Info("TAS leaf over-subscribed; capacity clamped to 0",
+						"leaf", leaf.id, "resource", rName, "deficit", -v,
+						"freeCapacity", leaf.freeCapacity, "tasUsage", leaf.tasUsage)
+					break
+				}
+			}
 		}
+		leaf.state, limitingRes = requirements.requests.CountInWithLimitingResource(remainingCapacity)
 
 		// Track resource exclusions: if this node can't fit even one pod,
 		// identify which resource is the bottleneck.
