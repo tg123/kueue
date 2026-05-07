@@ -24,6 +24,7 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -171,6 +172,9 @@ func Merge(meta *metav1.ObjectMeta, spec *corev1.PodSpec, info PodSetInfo) error
 	spec.NodeSelector = tmp.NodeSelector
 	spec.Tolerations = tmp.Tolerations
 	spec.SchedulingGates = tmp.SchedulingGates
+	if info.Affinity != nil {
+		spec.Affinity = mergeAffinity(spec.Affinity, info.Affinity)
+	}
 	return nil
 }
 
@@ -198,6 +202,14 @@ func RestorePodSpec(meta *metav1.ObjectMeta, spec *corev1.PodSpec, info PodSetIn
 		spec.SchedulingGates = slices.Clone(info.SchedulingGates)
 		changed = true
 	}
+	if !equality.Semantic.DeepEqual(spec.Affinity, info.Affinity) {
+		if info.Affinity != nil {
+			spec.Affinity = info.Affinity.DeepCopy()
+		} else {
+			spec.Affinity = nil
+		}
+		changed = true
+	}
 	return changed
 }
 
@@ -211,4 +223,89 @@ func BadPodSetsUpdateError(update string, err error) error {
 
 func IsPermanent(e error) bool {
 	return errors.Is(e, ErrInvalidPodsetInfo) || errors.Is(e, ErrInvalidPodSetUpdate)
+}
+
+// NodeExclusionAffinity creates a NodeAffinity that excludes the given node names
+// by adding a RequiredDuringSchedulingIgnoredDuringExecution rule with a NotIn
+// expression on the kubernetes.io/hostname label.
+func NodeExclusionAffinity(excludedNodes []string) *corev1.Affinity {
+	if len(excludedNodes) == 0 {
+		return nil
+	}
+	return &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      "kubernetes.io/hostname",
+								Operator: corev1.NodeSelectorOpNotIn,
+								Values:   slices.Clone(excludedNodes),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// mergeAffinity merges the new affinity into the existing one.
+// For RequiredDuringSchedulingIgnoredDuringExecution, it adds the new MatchExpressions
+// to each existing NodeSelectorTerm to ensure the constraints are always applied.
+func mergeAffinity(existing, incoming *corev1.Affinity) *corev1.Affinity {
+	if incoming == nil {
+		return existing
+	}
+	if existing == nil {
+		return incoming.DeepCopy()
+	}
+	result := existing.DeepCopy()
+	if incoming.NodeAffinity != nil {
+		result.NodeAffinity = mergeNodeAffinity(result.NodeAffinity, incoming.NodeAffinity)
+	}
+	return result
+}
+
+// mergeNodeAffinity merges new NodeAffinity rules into the existing ones.
+// For RequiredDuringSchedulingIgnoredDuringExecution, it adds the new MatchExpressions
+// to each existing NodeSelectorTerm. If no existing terms exist, the new terms are used as-is.
+func mergeNodeAffinity(existing, incoming *corev1.NodeAffinity) *corev1.NodeAffinity {
+	if incoming == nil {
+		return existing
+	}
+	if existing == nil {
+		return incoming.DeepCopy()
+	}
+	result := existing.DeepCopy()
+	if incoming.RequiredDuringSchedulingIgnoredDuringExecution != nil {
+		newExprs := collectAllMatchExpressions(incoming.RequiredDuringSchedulingIgnoredDuringExecution)
+		if len(newExprs) > 0 {
+			if result.RequiredDuringSchedulingIgnoredDuringExecution == nil ||
+				len(result.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms) == 0 {
+				result.RequiredDuringSchedulingIgnoredDuringExecution = incoming.RequiredDuringSchedulingIgnoredDuringExecution.DeepCopy()
+			} else {
+				// Add new expressions to each existing term so the exclusion applies
+				// to every OR branch. NodeSelectorTerms are ORed, and MatchExpressions
+				// within a term are ANDed.
+				for i := range result.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+					result.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[i].MatchExpressions = append(
+						result.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[i].MatchExpressions,
+						newExprs...,
+					)
+				}
+			}
+		}
+	}
+	return result
+}
+
+// collectAllMatchExpressions collects all MatchExpressions from all NodeSelectorTerms.
+func collectAllMatchExpressions(selector *corev1.NodeSelector) []corev1.NodeSelectorRequirement {
+	var result []corev1.NodeSelectorRequirement
+	for _, term := range selector.NodeSelectorTerms {
+		result = append(result, term.MatchExpressions...)
+	}
+	return result
 }

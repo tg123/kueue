@@ -512,3 +512,340 @@ func TestAddOrUpdateLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestNodeExclusionAffinity(t *testing.T) {
+	cases := map[string]struct {
+		excludedNodes []string
+		wantAffinity  *corev1.Affinity
+	}{
+		"nil excluded nodes": {
+			excludedNodes: nil,
+			wantAffinity:  nil,
+		},
+		"empty excluded nodes": {
+			excludedNodes: []string{},
+			wantAffinity:  nil,
+		},
+		"single excluded node": {
+			excludedNodes: []string{"node1"},
+			wantAffinity: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "kubernetes.io/hostname",
+										Operator: corev1.NodeSelectorOpNotIn,
+										Values:   []string{"node1"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"multiple excluded nodes": {
+			excludedNodes: []string{"node1", "node2", "node3"},
+			wantAffinity: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "kubernetes.io/hostname",
+										Operator: corev1.NodeSelectorOpNotIn,
+										Values:   []string{"node1", "node2", "node3"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := NodeExclusionAffinity(tc.excludedNodes)
+			if diff := cmp.Diff(tc.wantAffinity, got); diff != "" {
+				t.Errorf("Unexpected affinity (-want/+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestMergeAffinity(t *testing.T) {
+	cases := map[string]struct {
+		existing *corev1.Affinity
+		incoming *corev1.Affinity
+		want     *corev1.Affinity
+	}{
+		"both nil": {
+			existing: nil,
+			incoming: nil,
+			want:     nil,
+		},
+		"existing nil, incoming non-nil": {
+			existing: nil,
+			incoming: NodeExclusionAffinity([]string{"node1"}),
+			want:     NodeExclusionAffinity([]string{"node1"}),
+		},
+		"existing non-nil, incoming nil": {
+			existing: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-east-1"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			incoming: nil,
+			want: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-east-1"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"merge exclusion into existing single term": {
+			existing: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-east-1"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			incoming: NodeExclusionAffinity([]string{"node1", "node2"}),
+			want: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-east-1"},
+									},
+									{
+										Key:      "kubernetes.io/hostname",
+										Operator: corev1.NodeSelectorOpNotIn,
+										Values:   []string{"node1", "node2"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"merge exclusion into existing multiple terms": {
+			existing: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-east-1"},
+									},
+								},
+							},
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-west-2"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			incoming: NodeExclusionAffinity([]string{"node1"}),
+			want: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-east-1"},
+									},
+									{
+										Key:      "kubernetes.io/hostname",
+										Operator: corev1.NodeSelectorOpNotIn,
+										Values:   []string{"node1"},
+									},
+								},
+							},
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-west-2"},
+									},
+									{
+										Key:      "kubernetes.io/hostname",
+										Operator: corev1.NodeSelectorOpNotIn,
+										Values:   []string{"node1"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := mergeAffinity(tc.existing, tc.incoming)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("Unexpected result (-want/+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestMergeRestoreWithAffinity(t *testing.T) {
+	exclusionAffinity := NodeExclusionAffinity([]string{"node1", "node2"})
+	existingAffinity := &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      "zone",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{"us-east-1"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	cases := map[string]struct {
+		podSet             *kueue.PodSet
+		info               PodSetInfo
+		wantError          bool
+		wantAffinity       *corev1.Affinity
+		wantRestoreChanges bool
+	}{
+		"inject affinity into pod with no existing affinity": {
+			podSet: utiltestingapi.MakePodSet("", 1).Obj(),
+			info: PodSetInfo{
+				Affinity: exclusionAffinity,
+			},
+			wantAffinity:       exclusionAffinity,
+			wantRestoreChanges: true,
+		},
+		"inject affinity into pod with existing affinity": {
+			podSet: func() *kueue.PodSet {
+				ps := utiltestingapi.MakePodSet("", 1).Obj()
+				ps.Template.Spec.Affinity = existingAffinity.DeepCopy()
+				return ps
+			}(),
+			info: PodSetInfo{
+				Affinity: exclusionAffinity,
+			},
+			wantAffinity: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      "zone",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"us-east-1"},
+									},
+									{
+										Key:      "kubernetes.io/hostname",
+										Operator: corev1.NodeSelectorOpNotIn,
+										Values:   []string{"node1", "node2"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantRestoreChanges: true,
+		},
+		"no affinity change": {
+			podSet: utiltestingapi.MakePodSet("", 1).Obj(),
+			info:   PodSetInfo{},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			orig := tc.podSet.DeepCopy()
+
+			gotError := Merge(&tc.podSet.Template.ObjectMeta, &tc.podSet.Template.Spec, tc.info)
+
+			if tc.wantError != (gotError != nil) {
+				t.Errorf("Unexpected error status want: %v", tc.wantError)
+			}
+
+			if !tc.wantError {
+				if diff := cmp.Diff(tc.wantAffinity, tc.podSet.Template.Spec.Affinity); diff != "" {
+					t.Errorf("Unexpected affinity after merge (-want/+got):\n%s", diff)
+				}
+
+				restoreInfo := FromPodSet(orig)
+				gotRestoreChange := RestorePodSpec(&tc.podSet.Template.ObjectMeta, &tc.podSet.Template.Spec, restoreInfo)
+				if gotRestoreChange != tc.wantRestoreChanges {
+					t.Errorf("Unexpected restore change status want:%v got:%v", tc.wantRestoreChanges, gotRestoreChange)
+				}
+				if diff := cmp.Diff(orig.Template.Spec.Affinity, tc.podSet.Template.Spec.Affinity); diff != "" {
+					t.Errorf("Unexpected affinity after restore (-want/+got):\n%s", diff)
+				}
+			}
+		})
+	}
+}

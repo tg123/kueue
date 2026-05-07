@@ -42,6 +42,11 @@ type LocalQueueSpecApplyConfiguration struct {
 	// participating in AdmissionFairSharing.  The values are only relevant
 	// if AdmissionFairSharing is enabled in the Kueue configuration.
 	FairSharing *FairSharingApplyConfiguration `json:"fairSharing,omitempty"`
+	// excludedNodes is an optional list of node names that workloads admitted
+	// through this LocalQueue should NOT be scheduled to.
+	// When set, a NodeAffinity anti-affinity rule is injected into each admitted
+	// workload's PodSets to prevent scheduling on the listed nodes.
+	ExcludedNodes []string `json:"excludedNodes,omitempty"`
 }
 
 // LocalQueueSpecApplyConfiguration constructs a declarative configuration of the LocalQueueSpec type for use with
@@ -71,5 +76,15 @@ func (b *LocalQueueSpecApplyConfiguration) WithStopPolicy(value kueuev1beta2.Sto
 // If called multiple times, the FairSharing field is set to the value of the last call.
 func (b *LocalQueueSpecApplyConfiguration) WithFairSharing(value *FairSharingApplyConfiguration) *LocalQueueSpecApplyConfiguration {
 	b.FairSharing = value
+	return b
+}
+
+// WithExcludedNodes adds the given value to the ExcludedNodes field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the ExcludedNodes field.
+func (b *LocalQueueSpecApplyConfiguration) WithExcludedNodes(values ...string) *LocalQueueSpecApplyConfiguration {
+	for i := range values {
+		b.ExcludedNodes = append(b.ExcludedNodes, values[i])
+	}
 	return b
 }

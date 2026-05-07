@@ -1511,6 +1511,16 @@ func getPodSetsInfoFromStatus(ctx context.Context, c client.Client, w *kueue.Wor
 
 	podSetsInfo := make([]podset.PodSetInfo, len(w.Status.Admission.PodSetAssignments))
 
+	// Read the LocalQueue to check for excluded nodes.
+	var excludedNodesAffinity *corev1.Affinity
+	if w.Spec.QueueName != "" {
+		lq := &kueue.LocalQueue{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: w.Namespace, Name: string(w.Spec.QueueName)}, lq); err != nil {
+			return nil, fmt.Errorf("reading LocalQueue %s/%s: %w", w.Namespace, w.Spec.QueueName, err)
+		}
+		excludedNodesAffinity = podset.NodeExclusionAffinity(lq.Spec.ExcludedNodes)
+	}
+
 	for i, psAssignment := range w.Status.Admission.PodSetAssignments {
 		info, err := podset.FromAssignment(ctx, c, &psAssignment, &w.Spec.PodSets[i])
 		if err != nil {
@@ -1542,6 +1552,12 @@ func getPodSetsInfoFromStatus(ctx context.Context, c client.Client, w *kueue.Wor
 				}
 			}
 		}
+
+		// Apply node exclusion affinity from LocalQueue.
+		if excludedNodesAffinity != nil {
+			info.Affinity = excludedNodesAffinity
+		}
+
 		podSetsInfo[i] = info
 	}
 	return podSetsInfo, nil
